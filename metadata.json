@@ -1,0 +1,5 @@
+{
+  "name": "Copy of BCIS",
+  "description": "A production-grade, offline-capable MRZ (Machine Readable Zone) parser and validator for travel documents (Passports TD3 & Cards TD1). Features automatic OCR correction, data visualization, and AI-assisted risk analysis.",
+  "requestFramePermissions": []
+}
