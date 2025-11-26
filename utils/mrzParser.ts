@@ -7,6 +7,25 @@ const WEIGHTS = [7, 3, 1];
 const FIX_NUM: Record<string, string> = { 'O': '0', 'Q': '0', 'D': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'B': '8' };
 const FIX_ALPHA: Record<string, string> = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B' };
 
+// Normalization map for non-standard or single-letter issuing codes to 3-letter ICAO
+const NORMALIZE_ISS: Record<string, string> = {
+    'D': 'DEU',
+    'F': 'FRA',
+    'E': 'ESP',
+    'I': 'ITA',
+    'A': 'AUT',
+    'B': 'BEL',
+    'P': 'PRT',
+    'N': 'NOR',
+    'S': 'SWE',
+    'FIN': 'FIN', // Ensure these stay 3 chars if parsed correctly
+    'DK': 'DNK',
+    'CH': 'CHE',
+    'GB': 'GBR',
+    'GR': 'GRC',
+    'NL': 'NLD'
+};
+
 const getCharVal = (c: string): number => {
   const code = c.charCodeAt(0);
   if (code >= 48 && code <= 57) return code - 48; // 0-9
@@ -22,9 +41,14 @@ const calcCheck = (str: string): number => {
   return sum % 10;
 };
 
+// Permissive Check: Allows '<' to represent 0 if the calculated sum is 0.
+const isValidCheck = (calculated: number, actualChar: string): boolean => {
+    if (actualChar === '<') return calculated === 0;
+    return calculated === parseInt(actualChar);
+};
+
 const genLogLine = (label: string, actual: string, calculated: number): string => {
-    const actVal = parseInt(actual);
-    const ok = actVal === calculated;
+    const ok = isValidCheck(calculated, actual);
     const resText = ok ? "OK" : "FAIL";
     return `> [${label.padEnd(9, ' ')}] Check Digit: ${actual} | Calculated: ${calculated} | Result: ${resText}`;
 };
@@ -72,26 +96,29 @@ const parseGBKName = (optSection: string): { text: string; truncated: number | n
 
 const cleanName = (str: string) => str.replace(/</g, ' ').trim();
 
+// Helper to normalize country codes (removes filler and maps 1/2 chars to 3 chars)
+const normalizeCountry = (code: string): string => {
+    let clean = code.replace(/</g, '').trim();
+    if (NORMALIZE_ISS[clean]) return NORMALIZE_ISS[clean];
+    return clean;
+};
+
 // Helper to determine precise document type key
 const getDetailedType = (iss: string, typeCode: string, format: string, docNum: string = '') => {
+    const cleanIss = normalizeCountry(iss);
+
     // 1. Visas
     if (typeCode.startsWith('V')) return 'type_visa';
 
     // 2. Specific Chinese/HK/Macau logic
-    if (iss === 'CHN' || iss === 'HKG' || iss === 'MAC' || iss === 'CHN (NIA)') {
+    if (cleanIss === 'CHN' || cleanIss === 'HKG' || cleanIss === 'MAC' || cleanIss === 'CHN (NIA)') {
         if (typeCode === 'PO') return 'type_chn_po';
         if (typeCode.startsWith('P')) {
-            // Check specifically for HK/Macau issuing states first
-            if (iss === 'HKG') return 'type_hkg';
-            if (iss === 'MAC') return 'type_mac';
-            
-            // If issued by CHN, check doc number prefixes for SAR passports
-            // HK passports usually start with H or K
+            if (cleanIss === 'HKG') return 'type_hkg';
+            if (cleanIss === 'MAC') return 'type_mac';
             if (docNum.startsWith('H') || docNum.startsWith('K')) return 'type_hkg';
-            // Macau passports usually start with M
             if (docNum.startsWith('M') && docNum.length > 8) return 'type_mac'; 
-            
-            return 'type_chn_pe'; // Default to PRC E-Passport
+            return 'type_chn_pe'; 
         }
         if (typeCode === 'CS') return 'type_eep_hk';
         if (typeCode === 'CD') return 'type_eep_tw';
@@ -102,7 +129,7 @@ const getDetailedType = (iss: string, typeCode: string, format: string, docNum: 
     if (format === 'TD1' || format === 'TD2' || format === 'CN_CARD') docClass = 'id';
     if (typeCode.startsWith('I') || typeCode.startsWith('C')) docClass = 'id';
     
-    const country = iss.toLowerCase();
+    const country = cleanIss.toLowerCase();
     return `type_${country}_${docClass}`;
 };
 
@@ -116,7 +143,7 @@ export const processMRZ = (rawInput: string, autoFix: boolean): MrzResult => {
   if (lines.length === 2 && lines[0].length === 44 && lines[1].length === 44) format = 'TD3';
   else if (lines.length === 3 && lines[0].length === 30 && lines[1].length === 30 && lines[2].length === 30) format = 'TD1';
   else if (lines.length === 2 && lines[0].length === 36 && lines[1].length === 36) format = 'TD2';
-  else if (lines.length === 1 && lines[0].length === 30) format = 'CN_CARD'; // Specific Single Line 30-char format (CHN EEP)
+  else if (lines.length === 1 && lines[0].length === 30) format = 'CN_CARD'; 
 
   if (format === 'UNKNOWN') {
       return {
@@ -159,12 +186,12 @@ const parseTD3 = (lines: string[], autoFix: boolean): MrzResult => {
     const opt = l2.substring(28, 42); const optC = l2[42];
     const finalC = l2[43];
 
-    const cDoc = calcCheck(docNum); const vDoc = cDoc === parseInt(docNumC);
-    const cDob = calcCheck(dob); const vDob = cDob === parseInt(dobC);
-    const cExp = calcCheck(exp); const vExp = cExp === parseInt(expC);
-    const cOpt = calcCheck(opt); const vOpt = cOpt === parseInt(optC);
+    const cDoc = calcCheck(docNum); const vDoc = isValidCheck(cDoc, docNumC);
+    const cDob = calcCheck(dob); const vDob = isValidCheck(cDob, dobC);
+    const cExp = calcCheck(exp); const vExp = isValidCheck(cExp, expC);
+    const cOpt = calcCheck(opt); const vOpt = isValidCheck(cOpt, optC);
     const compStr = l2.substring(0, 10) + l2.substring(13, 20) + l2.substring(21, 43);
-    const cFinal = calcCheck(compStr); const vFinal = cFinal === parseInt(finalC);
+    const cFinal = calcCheck(compStr); const vFinal = isValidCheck(cFinal, finalC);
 
     const calcLogs = [
         genLogLine("DOC_NUM", docNumC, cDoc), genLogLine("DOB", dobC, cDob),
@@ -180,9 +207,13 @@ const parseTD3 = (lines: string[], autoFix: boolean): MrzResult => {
         valid: vDoc && vDob && vExp && vFinal, format: typeCode.startsWith('V') ? 'MRV_A' : 'TD3', type: typeCode.startsWith('V') ? 'VISA' : 'PASSPORT',
         rawLines: [l1, l2],
         fields: {
-            documentNumber: docNum, documentNumberCheck: docNumC, nationality: nat, birthDate: dob, birthDateCheck: dobC, sex,
+            documentNumber: docNum, documentNumberCheck: docNumC, 
+            nationality: normalizeCountry(nat), // Normalize
+            birthDate: dob, birthDateCheck: dobC, sex,
             expiryDate: exp, expiryDateCheck: expC, optionalData: opt, optionalDataCheck: optC,
-            documentTypeRaw: typeCode, detailedType, issuingState: iss, surname: cleanName(sur), givenNames: cleanName(given || ''),
+            documentTypeRaw: typeCode, detailedType, 
+            issuingState: normalizeCountry(iss), // Normalize
+            surname: cleanName(sur), givenNames: cleanName(given || ''),
             compositeCheck: finalC
         },
         validations: { documentNumber: vDoc, birthDate: vDob, expiryDate: vExp, optionalData: vOpt, composite: vFinal },
@@ -213,11 +244,11 @@ const parseTD2 = (lines: string[], autoFix: boolean): MrzResult => {
     const opt = l2.substring(28, 35);
     const finalC = l2[35];
 
-    const cDoc = calcCheck(docNum); const vDoc = cDoc === parseInt(docNumC);
-    const cDob = calcCheck(dob); const vDob = cDob === parseInt(dobC);
-    const cExp = calcCheck(exp); const vExp = cExp === parseInt(expC);
+    const cDoc = calcCheck(docNum); const vDoc = isValidCheck(cDoc, docNumC);
+    const cDob = calcCheck(dob); const vDob = isValidCheck(cDob, dobC);
+    const cExp = calcCheck(exp); const vExp = isValidCheck(cExp, expC);
     const compStr = l2.substring(0, 10) + l2.substring(13, 20) + l2.substring(21, 35);
-    const cFinal = calcCheck(compStr); const vFinal = cFinal === parseInt(finalC);
+    const cFinal = calcCheck(compStr); const vFinal = isValidCheck(cFinal, finalC);
 
     const calcLogs = [
         genLogLine("DOC_NUM", docNumC, cDoc), genLogLine("DOB", dobC, cDob),
@@ -230,9 +261,13 @@ const parseTD2 = (lines: string[], autoFix: boolean): MrzResult => {
         valid: vDoc && vDob && vExp && vFinal, format: typeCode.startsWith('V') ? 'MRV_B' : 'TD2', type: typeCode.startsWith('V') ? 'VISA' : 'CARD',
         rawLines: [l1, l2],
         fields: {
-            documentNumber: docNum, documentNumberCheck: docNumC, nationality: nat, birthDate: dob, birthDateCheck: dobC, sex,
+            documentNumber: docNum, documentNumberCheck: docNumC, 
+            nationality: normalizeCountry(nat), 
+            birthDate: dob, birthDateCheck: dobC, sex,
             expiryDate: exp, expiryDateCheck: expC, optionalData: opt, optionalDataCheck: null,
-            documentTypeRaw: typeCode, detailedType, issuingState: iss, surname: cleanName(sur), givenNames: cleanName(given || ''),
+            documentTypeRaw: typeCode, detailedType, 
+            issuingState: normalizeCountry(iss), 
+            surname: cleanName(sur), givenNames: cleanName(given || ''),
             compositeCheck: finalC
         },
         validations: { documentNumber: vDoc, birthDate: vDob, expiryDate: vExp, optionalData: true, composite: vFinal },
@@ -263,11 +298,11 @@ const parseTD1 = (lines: string[], autoFix: boolean): MrzResult => {
 
     const [sur, given] = l3.split('<<');
 
-    const cDoc = calcCheck(docNum); const vDoc = cDoc === parseInt(docNumC);
-    const cDob = calcCheck(dob); const vDob = cDob === parseInt(dobC);
-    const cExp = calcCheck(exp); const vExp = cExp === parseInt(expC);
+    const cDoc = calcCheck(docNum); const vDoc = isValidCheck(cDoc, docNumC);
+    const cDob = calcCheck(dob); const vDob = isValidCheck(cDob, dobC);
+    const cExp = calcCheck(exp); const vExp = isValidCheck(cExp, expC);
     const compStr = l1.substring(5, 30) + l2.substring(0, 29);
-    const cFinal = calcCheck(compStr); const vFinal = cFinal === parseInt(finalC);
+    const cFinal = calcCheck(compStr); const vFinal = isValidCheck(cFinal, finalC);
 
     const calcLogs = [
         genLogLine("DOC_NUM", docNumC, cDoc), genLogLine("DOB", dobC, cDob),
@@ -280,9 +315,13 @@ const parseTD1 = (lines: string[], autoFix: boolean): MrzResult => {
         valid: vDoc && vDob && vExp && vFinal, format: 'TD1', type: 'CARD',
         rawLines: lines,
         fields: {
-            documentNumber: docNum, documentNumberCheck: docNumC, nationality: nat, birthDate: dob, birthDateCheck: dobC, sex,
+            documentNumber: docNum, documentNumberCheck: docNumC, 
+            nationality: normalizeCountry(nat), 
+            birthDate: dob, birthDateCheck: dobC, sex,
             expiryDate: exp, expiryDateCheck: expC, optionalData: opt1, optionalDataCheck: null, optionalData2: opt2,
-            documentTypeRaw: typeCode, detailedType, issuingState: iss, surname: cleanName(sur), givenNames: cleanName(given || ''),
+            documentTypeRaw: typeCode, detailedType, 
+            issuingState: normalizeCountry(iss), 
+            surname: cleanName(sur), givenNames: cleanName(given || ''),
             compositeCheck: finalC
         },
         validations: { documentNumber: vDoc, birthDate: vDob, expiryDate: vExp, optionalData: true, composite: vFinal },
@@ -312,28 +351,32 @@ const parseCard30 = (lines: string[], autoFix: boolean): MrzResult => {
     const dob = l1.substring(21, 27); const dobC = l1[27];
     const finalC = l1[29];
 
-    const cDoc = calcCheck(docNum); const vDoc = cDoc === parseInt(docNumC);
-    const cExp = calcCheck(exp); const vExp = cExp === parseInt(expC);
-    const cDob = calcCheck(dob); const vDob = cDob === parseInt(dobC);
+    const cDoc = calcCheck(docNum); const vDoc = isValidCheck(cDoc, docNumC);
+    const cExp = calcCheck(exp); const vExp = isValidCheck(cExp, expC);
+    const cDob = calcCheck(dob); const vDob = isValidCheck(cDob, dobC);
     
     const compStr = l1.substring(2, 12) + l1.substring(13, 20) + l1.substring(21, 28);
-    const cFinal = calcCheck(compStr); const vFinal = cFinal === parseInt(finalC);
+    const cFinal = calcCheck(compStr); const vFinal = isValidCheck(cFinal, finalC);
 
     const calcLogs = [
         genLogLine("DOC_NUM", docNumC, cDoc), genLogLine("EXPIRY", expC, cExp), 
         genLogLine("DOB", dobC, cDob), genLogLine("FINAL", finalC, cFinal)
     ];
 
-    const iss = "CHN"; // Implicit
+    const iss = "CHN"; 
     const detailedType = getDetailedType(iss, typeCode, 'CN_CARD', docNum);
 
     const result: MrzResult = {
         valid: vDoc && vDob && vExp && vFinal, format: 'CN_CARD', type: 'CARD', // Correct format CN_CARD
         rawLines: [l1],
         fields: {
-            documentNumber: docNum, documentNumberCheck: docNumC, nationality: 'CHN', birthDate: dob, birthDateCheck: dobC, sex: null,
+            documentNumber: docNum, documentNumberCheck: docNumC, 
+            nationality: 'CHN', 
+            birthDate: dob, birthDateCheck: dobC, sex: null,
             expiryDate: exp, expiryDateCheck: expC, optionalData: null, optionalDataCheck: null,
-            documentTypeRaw: typeCode, detailedType, issuingState: iss, surname: null, givenNames: null,
+            documentTypeRaw: typeCode, detailedType, 
+            issuingState: iss, // Keep implicit CHN
+            surname: null, givenNames: null,
             compositeCheck: finalC
         },
         validations: { documentNumber: vDoc, birthDate: vDob, expiryDate: vExp, optionalData: true, composite: vFinal },
@@ -357,14 +400,16 @@ const calculateDates = (res: MrzResult) => {
 
 // --- UNIVERSAL DATA MINING & DEEP ANALYSIS ---
 const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
+    const cleanIss = normalizeCountry(iss);
     const clean = rawOpt ? rawOpt.replace(/</g, '').trim() : '';
+    
     if (!clean) {
         res.parsed.extendedData = { titleKey: 'lbl_struct_check', text: "ICAO COMPLIANT", truncated: null };
         return;
     }
 
     // 1. CHINA GBK - FULL LOGIC RESTORED
-    if ((iss === 'CHN' || iss === 'HKG' || iss === 'MAC') && res.format === 'TD3') {
+    if ((cleanIss === 'CHN' || cleanIss === 'HKG' || cleanIss === 'MAC') && res.format === 'TD3') {
         const gbk = parseGBKName(res.fields.optionalData || '');
         if (gbk) {
              res.parsed.extendedData = { titleKey: 'lbl_chn_id', text: gbk.text, truncated: gbk.truncated };
@@ -382,7 +427,6 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
                 const trunc = gbk.truncated || 0;
 
                 // Logic 1: Truncation Flag vs Buffer Capacity
-                // If truncated > 0, buffer must be full. If buffer has fillers, it wasn't full.
                 if (trunc > 0 && gbk.hasFillers) {
                         res.risks.push({
                         level: 'critical',
@@ -437,13 +481,13 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 2. SPAIN DNI
-    if (iss === 'ESP') {
+    if (cleanIss === 'ESP') {
         res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `DNI: ${clean}`, truncated: null };
         return;
     }
 
     // 3. GERMANY
-    if (iss === 'DEU') {
+    if (cleanIss === 'DEU') {
         if (res.format === 'TD2') {
              res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Serial/Auth: ${clean}`, truncated: null };
         } else {
@@ -453,31 +497,31 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 4. NETHERLANDS
-    if (iss === 'NLD' && /^\d{9}$/.test(clean)) {
+    if (cleanIss === 'NLD' && /^\d{9}$/.test(clean)) {
          res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `BSN: ${clean}`, truncated: null };
          return;
     }
     
     // 5. CZECHIA / SLOVAKIA
-    if ((iss === 'CZE' || iss === 'SVK') && clean.length >= 9) {
+    if ((cleanIss === 'CZE' || cleanIss === 'SVK') && clean.length >= 9) {
         res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `RČ: ${clean}`, truncated: null };
         return;
     }
 
     // 6. SLOVENIA
-    if (iss === 'SVN' && clean.length >= 13) {
+    if (cleanIss === 'SVN' && clean.length >= 13) {
         res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `EMŠO: ${clean}`, truncated: null };
         return;
     }
 
     // 7. SOUTH AFRICA
-    if (iss === 'ZAF') {
+    if (cleanIss === 'ZAF') {
          res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `ID No: ${clean}`, truncated: null };
          return;
     }
 
     // 8. POLAND (PESEL)
-    if (iss === 'POL') {
+    if (cleanIss === 'POL') {
         const peselMatch = clean.match(/\d{11}/);
         if (peselMatch) {
             res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `PESEL: ${peselMatch[0]}`, truncated: null };
@@ -486,7 +530,7 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 9. ROMANIA (CNP)
-    if (iss === 'ROU') {
+    if (cleanIss === 'ROU') {
         const cnpMatch = clean.match(/\d{13}/);
         if (cnpMatch) {
             res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `CNP: ${cnpMatch[0]}`, truncated: null };
@@ -495,7 +539,7 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 10. BELGIUM (National Number)
-    if (iss === 'BEL') {
+    if (cleanIss === 'BEL') {
         const nnMatch = clean.match(/\d{11}/);
         if (nnMatch) {
             res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Nat. No: ${nnMatch[0]}`, truncated: null };
@@ -504,7 +548,7 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 11. SWITZERLAND (AHV)
-    if (iss === 'CHE') {
+    if (cleanIss === 'CHE') {
          const ahvMatch = clean.match(/\d{13}/);
          if (ahvMatch) {
              res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `AHV: ${ahvMatch[0]}`, truncated: null };
@@ -513,7 +557,7 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
 
     // 12. ISRAEL
-    if (iss === 'ISR') {
+    if (cleanIss === 'ISR') {
         const idMatch = clean.match(/\d{9}/);
         if (idMatch) {
             res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `ID No: ${idMatch[0]}`, truncated: null };
@@ -522,26 +566,26 @@ const enrichUniversalData = (res: MrzResult, iss: string, rawOpt: string) => {
     }
     
     // 13. PORTUGAL (NIF/SNS)
-    if (iss === 'PRT') {
+    if (cleanIss === 'PRT') {
          // Portugal Citizen Card often has multiple numbers, simplified display
          res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Civil ID/Tax: ${clean}`, truncated: null };
          return;
     }
 
     // 14. NORDICS (SWE, FIN, NOR, ISL) - Personal IDs
-    if (['SWE', 'FIN', 'NOR', 'ISL'].includes(iss)) {
+    if (['SWE', 'FIN', 'NOR', 'ISL'].includes(cleanIss)) {
         res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Personal ID: ${clean}`, truncated: null };
         return;
     }
 
     // 15. BALTICS (EST, LVA, LTU)
-    if (['EST', 'LVA', 'LTU'].includes(iss)) {
+    if (['EST', 'LVA', 'LTU'].includes(cleanIss)) {
          res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Personal Code: ${clean}`, truncated: null };
          return;
     }
 
     // 16. UKRAINE
-    if (iss === 'UKR') {
+    if (cleanIss === 'UKR') {
         res.parsed.extendedData = { titleKey: 'lbl_personal_no', text: `Record No: ${clean}`, truncated: null };
         return;
     }
