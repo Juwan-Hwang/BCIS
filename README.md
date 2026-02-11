@@ -1,10 +1,6 @@
 # 出入境证件鉴别与研判系统 [BCIS-V15]
 ---
-## Quick Start
 
-Open `standalone.html` directly in your browser.  
-No build, no dependencies required.
----
 ## 1. 项目简介
 **BCIS (Border Control Intelligence System)** 是一套专为海关、边检及执法部门设计的**离线应急查验工具**。该系统完全在浏览器端运行（零网络请求），用于在断网、设备故障或应急环境下，快速解析、验证和研判国际旅行证件的机读区（MRZ）数据。
 
@@ -83,3 +79,8 @@ No build, no dependencies required.
 
 ## 6. 免责声明
 本项目仅供在应急、离线、教学或测试环境中使用。请严格遵守当地法律法规及数据隐私条例。不得用于非法用途。
+
+## Quick Start
+
+Open `standalone.html` directly in your browser.  
+No build, no dependencies required.
